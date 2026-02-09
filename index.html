@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Team Radar</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: sans-serif; background: #1a1a1a; color: #eee; margin: 12px; }
+    .bar { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+    label { font-size: 14px; }
+    select { padding: 6px 10px; background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; min-width: 160px; }
+    input[type="text"] { padding: 6px 10px; background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; min-width: 220px; }
+    .radarWrap { display: inline-block; background: #0d0d0d; padding: 8px; border-radius: 8px; border: 1px solid #444; }
+    canvas { display: block; border-radius: 4px; }
+    .hint { font-size: 12px; color: #888; margin-top: 8px; }
+    .status { font-size: 12px; margin-top: 4px; }
+    .status.ok { color: #2ecc71; }
+    .status.err { color: #e74c3c; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <label>I am:</label>
+    <select id="me">
+      <option value="">-- Select your name --</option>
+    </select>
+  </div>
+  <div class="bar">
+    <label>Server URL:</label>
+    <input type="text" id="apiUrl" placeholder="https://xxx.ngrok-free.app or leave empty if same site">
+    <button type="button" id="applyUrl" style="padding:6px 12px;background:#333;color:#eee;border:1px solid #555;border-radius:4px;cursor:pointer">Apply</button>
+  </div>
+  <div class="radarWrap">
+    <canvas id="c" width="280" height="280"></canvas>
+  </div>
+  <p class="hint">Select your name to highlight yourself (YOU) on the radar. Data comes from the host's game.</p>
+  <p class="status" id="status"></p>
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const meSelect = document.getElementById('me');
+    const apiUrlInput = document.getElementById('apiUrl');
+    const applyBtn = document.getElementById('applyUrl');
+    const statusEl = document.getElementById('status');
+    let myName = '';
+    let data = null;
+
+    function getApiBase() {
+      const params = new URLSearchParams(location.search);
+      let base = params.get('api') || apiUrlInput.value.trim();
+      if (base && !/\/$/.test(base)) base = base.replace(/\/+$/, '');
+      return base || '';
+    }
+
+    function apiFetch(path) {
+      const base = getApiBase();
+      const url = base ? (base + path) : path;
+      return fetch(url, { mode: base ? 'cors' : 'same-origin' });
+    }
+
+    function setStatus(ok, msg) {
+      statusEl.textContent = msg;
+      statusEl.className = 'status ' + (ok ? 'ok' : 'err');
+    }
+
+    function fetchRadar() {
+      apiFetch('/api/radar')
+        .then(r => {
+          if (!r.ok) throw new Error(r.status);
+          return r.json();
+        })
+        .then(d => {
+          data = d;
+          fillTeamNames();
+          draw();
+          setStatus(true, 'Connected');
+        })
+        .catch(() => {
+          data = null;
+          setStatus(false, 'No connection. Set Server URL (e.g. ngrok link) or open from host.');
+        });
+    }
+
+    function draw() {
+      if (!data || !data.players) return;
+      const w = canvas.width, h = canvas.height;
+      const cx = w/2, cy = h/2;
+      const range = data.radar.range || 150;
+      const size = data.radar.size || 200;
+      const scale = (size/2) / range;
+      const rot = data.radar.rotate;
+      const fwdX = data.radar.forwardX || 0, fwdY = data.radar.forwardY || 0;
+      const rightX = data.radar.rightX || 0, rightY = data.radar.rightY || 0;
+      const lx = data.local.x, ly = data.local.y;
+
+      ctx.fillStyle = 'rgba(0.05,0.05,0.05,0.95)';
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = 'rgba(0.8,0.3,0,0.8)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(0, 0, w, h);
+      ctx.strokeStyle = 'rgba(0.3,0.3,0.3,0.5)';
+      ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
+
+      ctx.fillStyle = 'rgba(1,1,0,1)';
+      ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI*2); ctx.fill();
+
+      data.players.forEach(p => {
+        let dx = p.x - lx, dy = p.y - ly;
+        let rx, ry;
+        if (rot) {
+          rx = -(dx * rightX + dy * rightY);
+          ry = dx * fwdX + dy * fwdY;
+        } else { rx = dx; ry = dy; }
+        const px = cx + rx * scale;
+        const py = cy - ry * scale;
+        if (px < 0 || px > w || py < 0 || py > h) return;
+        const isMe = (myName && p.name === myName);
+        if (isMe) {
+          ctx.fillStyle = 'rgba(0,1,1,1)';
+          ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI*2); ctx.fill();
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.fillStyle = '#fff';
+          ctx.font = '10px sans-serif';
+          ctx.fillText('YOU', px - 10, py - 10);
+        } else {
+          ctx.fillStyle = p.teammate ? 'rgba(0,1,0,1)' : (p.visible ? 'rgba(1,0.5,0,1)' : 'rgba(1,0,0,1)');
+          ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2); ctx.fill();
+        }
+      });
+
+      ctx.fillStyle = 'rgba(1,1,1,0.8)';
+      ctx.font = '12px sans-serif';
+      ctx.fillText('N', cx - 3, 14);
+    }
+
+    function fillTeamNames() {
+      if (!data || !data.teamNames) return;
+      const sel = meSelect;
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">-- Select your name --</option>';
+      data.teamNames.forEach(n => {
+        const o = document.createElement('option');
+        o.value = n;
+        o.textContent = n;
+        sel.appendChild(o);
+      });
+      if (cur && data.teamNames.indexOf(cur) >= 0) sel.value = cur;
+    }
+
+    meSelect.addEventListener('change', () => { myName = meSelect.value; });
+
+    applyBtn.addEventListener('click', () => {
+      apiUrlInput.value = getApiBase() || apiUrlInput.value.trim();
+      fetchRadar();
+    });
+
+    (function initFromQuery() {
+      const params = new URLSearchParams(location.search);
+      const api = params.get('api');
+      if (api) apiUrlInput.value = api;
+    })();
+
+    setInterval(fetchRadar, 150);
+    setInterval(() => { if (data) fillTeamNames(); }, 500);
+    fetchRadar();
+  </script>
+</body>
+</html>
